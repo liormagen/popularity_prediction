@@ -1,0 +1,62 @@
+import os
+import sys
+import operator
+import numpy as np
+import pandas as pd
+import scipy
+from scipy import sparse
+import xgboost as xgb
+from sklearn import model_selection, preprocessing, ensemble
+from sklearn.metrics import log_loss
+from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
+
+
+def runXGB(train_X, train_y, test_X, test_y=None, feature_names=None, seed_val=0, num_rounds=1000):
+    param = {}
+    param['objective'] = 'multi:softprob'
+    param['eta'] = 0.1
+    param['max_depth'] = 6
+    param['silent'] = 1
+    param['num_class'] = 3
+    param['eval_metric'] = "mlogloss"
+    param['min_child_weight'] = 1
+    param['subsample'] = 0.7
+    param['colsample_bytree'] = 0.7
+    param['seed'] = seed_val
+    num_rounds = num_rounds
+
+    plst = list(param.items())
+    xgtrain = xgb.DMatrix(train_X, label=train_y)
+
+    if test_y is not None:
+        xgtest = xgb.DMatrix(test_X, label=test_y)
+        watchlist = [(xgtrain, 'train'), (xgtest, 'test')]
+        model = xgb.train(plst, xgtrain, num_rounds, watchlist, early_stopping_rounds=20)
+    else:
+        xgtest = xgb.DMatrix(test_X)
+        model = xgb.train(plst, xgtrain, num_rounds)
+
+    pred_test_y = model.predict(xgtest)
+    return pred_test_y, model
+
+
+train_file = "train.json"
+train_df = pd.read_json(train_file)
+features_to_use = ["bathrooms", "bedrooms", "latitude", "longitude", "price"]
+
+train_X = scipy.sparse.csr_matrix(train_df[features_to_use].values)
+
+cv_scores = []
+
+kf = model_selection.KFold(n_splits=5, shuffle=True, random_state=2016)
+
+target_num_map = {'high': 0, 'medium': 1, 'low': 2}
+train_y = np.array(train_df['interest_level'].apply(lambda x: target_num_map[x]))
+
+for dev_index, val_index in kf.split(range(train_X.shape[0])):
+    dev_X, val_X = train_X[dev_index, :], train_X[val_index, :]
+    dev_y, val_y = train_y[dev_index], train_y[val_index]
+    preds, model = runXGB(dev_X, dev_y, val_X, val_y)
+    cv_scores.append(log_loss(val_y, preds))
+    print(cv_scores)
+    # break
